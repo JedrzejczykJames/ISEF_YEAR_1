@@ -1,0 +1,622 @@
+# Data Preparation
+
+## Install and Load Required Packages
+
+```{r install-packages, eval=FALSE}
+install.packages(c("sf", "dplyr", "terra", "spatstat", "ggplot2", "raster",
+"dismo", "ENMeval", "ecospat", "reshape2", "tidyr")
+```{r load-libraries}
+library(sf)
+library(dplyr)
+library(terra)
+library(ggplot2)
+```
+## Process Florida County Shapefiles
+
+```{r county-processing}
+counties <- st_read("/INSERT/FILE/HERE")
+county_centroids <- st_centroid(counties)
+county_centroids <- st_transform(county_centroids, 4326)
+county_centroids <- county_centroids %>%
+mutate(
+longitude = 26 latitude = st_coordinates(. .)[,1],
+st_coordinates(. .)[,2]
+)
+county_df <- st_drop_geometry(county_centroids)
+head(county_df)
+```
+## West Nile Virus Data Processing
+
+```{r wnv-data}
+wnv_data <- read.csv(file.choose()
+wnv_data$ $CountyName <- sub("FL, ",
+""
+, wnv_data$ $FullGeoName)
+wnv_data$ $CountyName[wnv_data$ $CountyName = "De Soto"] <- "DeSoto"
+wnv_with_coords <- wnv_data %>%
+left_join(county_df %>% select(NAME, longitude, latitude),
+by = c("CountyName" = "NAME")
+sum(is.na(wnv_with_coords$ $longitude)
+write.csv(wnv_with_coords, "/INSERT/FILE/HERE", row.names
+= FALSE)
+```
+## Calculate Total Cases
+
+```{r total-cases}
+wnv_with_coords <- wnv_with_coords %>%
+mutate(total_cases = Reported.human.cases + Neuroinvasive.disease.cases
++ Identified.by.Blood.Donor.Screening)
+maxent_weighted <- wnv_with_coords %>%
+filter(total_cases > 0) %>%
+mutate(species = "WNV") %>%
+select(species, longitude, latitude, total_cases)
+head(maxent_weighted)
+nrow(maxent_weighted)
+write.csv(maxent_weighted, "/INSERT/FILE/HERE", row.names
+= FALSE)
+```
+## Avian Data Processing
+
+```{r avian r avian-
+-data}
+avian_data <- read.csv(file.choose()
+avian_cleaned <- avian_data %>%
+distinct(LONGDEC, LATDEC, .keep_all .keep_all = TRUE)
+cat("Original rows:", nrow(avian_data), "\n")
+cat("After removing duplicates:", nrow(avian_cleaned), "\n")
+cat("Removed", nrow(avian_data) -
+- nrow(avian_cleaned), "duplicate coordinat "duplicate coordinat
+es\n" es\n")
+avian_maxent <- avian_cleaned %>%
+select(species = SPECIES, longitude = LONGDEC, latitude = LATDEC)
+head(avian_maxent)
+write.csv(avian_maxent, "/INSERT/FILE/HERE", row.names = FALSE)
+```
+# Spatial Point Generation
+
+## Generate Weighted Random Points for WNV
+
+```{r weighted r weighted-
+-points}
+counties_sf <- st_read(file.choose()
+counties_with_cases <- counties_sf %>%
+left_join(wnv_with_coords %>%
+select(CountyName, total_cases),
+by = c("NAME" = "CountyName")
+counties_with_cases <- counties_with_cases %>%
+filter(total_cases > 0)
+set.seed(123)
+wnv_points_list <- list()
+for(i in 1::nrow(counties_with_cases) {
+county_geom <- counties_with_cases[i,]
+n_points <- counties_with_cases$ $total_cases[i]
+points <- st_sample(county_geom, size = n_points, type = "random")
+wnv_points_list[i] <- points
+}
+wnv_points <- do.call(c, wnv_points_list)
+wnv_coords <- st_coordinates(wnv_points) %>%
+as.data.frame() %>%
+rename(longitude = X, latitude = Y) %>%
+mutate(species = "WNV")
+head(wnv_coords)
+nrow(wnv_coords)
+write.csv(wnv_coords, "/INSERT/FILE/HERE", row.names = FALSE)
+```
+# Raster Processing
+
+## Agriculture Raster Alignment
+
+```{r agriculture r agriculture-
+-raster}
+ag_raster <- rast(file.choose()
+template <- rast(file.choose()
+ag_lowres <- aggregate(ag_raster, fact=150, fun="modal")
+ag_reprojected <- project(ag_lowres, crs(template)
+ag_cropped <- crop(ag_reprojected, template)
+ag_resampled <- resample(ag_cropped, template, method = "mode")
+print("Template resolution:")
+res(template)
+print("Resampled agriculture resolution:")
+res(ag_resampled)
+writeRaster(ag_resampled, "/INSERT/FILE/HERE", overwrite=TR
+UE)
+test_stack <- c(template, ag_resampled)
+print("Stack successful - layers perfectly aligned!")
+nlyr(test_stack)
+```
+# Spatial Statistics
+
+## Clark-Evans Test for Spatial Clustering
+
+```{r clustering r clustering-
+-analysis}
+library(spatstat)
+data <- read.csv(file.choose()
+window <- owin(range(data$ $longitude), range(data$ $latitude)
+ppp_data <- ppp(data$ $longitude, data$ $latitude, window=window)
+ce_test <- clarkevans.test(ppp_data)
+print(ce_test)
+```
+## Visualization of Spatial Clustering
+
+```{r clustering r clustering-
+-plot, fig.cap="WNV Spatial Clustering Analysis"}
+ggplot(data, aes(x=longitude, y=latitude) +
+stat_density_2d(aes(fill = ..level.. ..level..), geom="polygon", alpha=0.5) +
+geom_point(size=1, alpha=0.3) +
+scale_fill_gradient(low="blue", high="yellow", name="Density") +
+labs(title=paste("WNV Spatial Clustering (Clark-Evans R =", round(ce_te
+st$ $statistic, 3), ")"),
+subtitle="p-value < 0.001 - Significantly Clustered",
+x="Longitude", y="Latitude") +
+theme_minimal()
+```
+# Avian Presence Rasterization
+
+```{r avian r avian-
+-raster}
+avian_data <- read.csv(file.choose()
+template <- rast(file.choose()
+if (inherits(template, "RasterLayer") || inherits(template, "Raster") {
+template <- rast(template)
+}
+avian_points <- vect(avian_data,
+geom = c("longitude", "latitude"),
+crs = "EPSG:4326")
+avian_points <- project(avian_points, template)
+avian_raster <- template
+values(avian_raster) <- NA
+avian_raster <- rasterize(avian_points,
+avian_raster,
+fun = "length",
+background = NA)
+output_path <- file.choose(new = TRUE)
+writeRaster(avian_raster,
+output_path,
+overwrite = TRUE)
+```{r avian r avian-
+-plot, fig.cap="Avian Presence Raster"}
+plot(avian_raster, main = "Avian Presence Raster")
+points(avian_points, pch = 20, cex = 0.5, col = "red")
+print(paste("Template dimensions:", dim(template)
+print(paste("Output dimensions:", dim(avian_raster)
+print(paste("Number of presence cells:", sum(values(avian_raster) > 0, na.r
+m = TRUE)
+```
+# Data Cleaning
+
+## Filter Points Within Raster Extent
+
+```{r filter r filter-
+-points}
+library(raster)
+raster_file <- file.choose()
+r <- raster(raster_file)
+csv_file <- file.choose()
+points <- read.csv(csv_file)
+coords <- points[, c("longitude", "latitude")]
+sp_points <- SpatialPoints(coords, proj4string = crs(r)
+vals <- raster::::extract(r, sp_points)
+points$ $inside_raster <- !is.na(vals)
+clean_points <- points %>% filter(inside_raster)
+save_file <- file.choose(new = TRUE)
+write.csv(clean_points, save_file, row.names = FALSE)
+```
+# File Format Conversion
+
+## Convert TIF to ASC Format
+
+```{r tif r tif-
+-to-
+-asc}
+raster_folder <- "/INSERT/FILE/HERE"
+raster_files <- list.files(raster_folder, pattern = "\.tif$", full.names =
+TRUE)
+output_folder <- "/INSERT/FILE/HERE"
+dir.create(output_folder, showWarnings = FALSE)
+for(f in raster_files) {
+r <- rast(f)
+new_name <- file.path(output_folder, gsub("\.tif$", ".asc", basename
+(f)
+writeRaster(r, new_name, filetype = "AAIGrid", overwrite = TRUE, NAflag
+= -
+-9999)
+}
+```
+# Environmental Variable Analysis
+
+## Bioclim Variable Correlation Analysis
+
+```{r correlation r correlation-
+-analysis}
+library(reshape2)
+env_folder <- "/INSERT/FILE/HERE"
+env_files <- list.files(env_folder, pattern = "bio.*\.tif$", full.names = T
+RUE)
+env_stack <- rast(env_files)
+set.seed(123)
+sample_pts <- spatSample(env_stack, size = 5000, method = "random", na.rm =
+TRUE, as.df = TRUE)
+cor_matrix <- cor(sample_pts, use = "complete.obs")
+""
+rownames(cor_matrix) <- gsub("Florida_2.5m_Updatedwc2.1_2.5m_", rowname
+s(cor_matrix)
+""
+, colname
+colnames(cor_matrix) <- gsub("Florida_2.5m_Updatedwc2.1_2.5m_",
+s(cor_matrix)
+cor_melted <- melt(cor_matrix)
+cor_melted$ $value[lower.tri(cor_matrix)] <- NA
+```{r correlation r correlation-
+-heatmap, fig.cap="Bioclim Variable Correlation Heatmap",
+fig.width=10, fig.height=9}
+ggplot(cor_melted, aes(Var1, Var2, fill = value) +
+geom_tile(color = "white", linewidth = 0.5) +
+scale_fill_gradient2(low = "#2166AC", high = "#B2182B", mid = "white",
+midpoint = 0, limit = c(-
+-1,1), na.value = "white",
+name = "Correlation") +
+theme_minimal() +
+theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10, face
+= "bold"),
+245 246 247 axis.text.y = element_text(size = 10, face = "bold"),
+axis.title = element_blank(),
+panel.grid = element_blank(),
+plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
++
+coord_fixed() +
+ggtitle("Bioclim Variable Correlation Heatmap")
+ggsave("/INSERT/FILE/HERE", width = 10, h
+eight = 9, dpi = 300)
+```
+# Sampling Bias Layer
+
+## Create Bias Layer for MaxEnt
+
+```{r bias r bias-
+-layer}
+occs <- read.csv(file.choose()
+template <- rast(file.choose()
+coords <- vect(occs, geom = c("longitude", "latitude"), crs = "EPSG:4326")
+coords <- project(coords, template)
+bias <- rasterize(coords, template, fun = "length", background = 0)
+bias <- bias + 1
+bias <- focal(bias, w = 7, fun = mean, na.rm = TRUE)
+```{r bias r bias-
+-plot, fig.cap="Sampling Bias Layer"}
+plot(bias, main = "Sampling Bias Layer")
+points(coords, pch = 20, col = "red", cex = 0.5)
+output_path <- file.choose(new = TRUE)
+writeRaster(bias, output_path,
+filetype = "AAIGrid",
+overwrite = TRUE,
+NAflag = -
+-9999)
+```
+# MaxEnt Modeling
+
+## ENMeval Model Tuning and Selection
+
+```{r enmeval r enmeval, eval=FALSE}
+library(dismo)
+library(ENMeval)
+occs <- read.csv(file.choose()
+occs_coords <- occs[, c("longitude", "latitude")]
+colnames(occs_coords) <- c("lon", "lat")
+occs_coords <- na.omit(occs_coords)
+env_folder <- "/INSERT/FILE/HERE"
+env_files <- list.files(env_folder, pattern = "\.asc$", full.names = TRUE)
+env_rast <- rast(env_files)
+bias_rast <- rast(file.choose()
+bias_values <- values(bias_rast)
+bias_values[is.na(bias_values)] <- 0
+set.seed(123)
+bg_cells <- sample(1::ncell(bias_rast), size = 10000, prob = bias_values, re
+place = FALSE)
+bg_coords <- xyFromCell(bias_rast, bg_cells)
+colnames(bg_coords) <- c("lon", "lat")
+valid_occ_idx <- which(!is.na(extract(env_rast[1], occs_coords)
+occs_valid <- occs_coords[valid_occ_idx,]
+valid_bg_idx <- which(!is.na(extract(env_rast[1], bg_coords)
+bg_coords_valid <- bg_coords[valid_bg_idx,]
+eval_results <- ENMevaluate(
+occs = occs_valid,
+envs = env_rast,
+bg = bg_coords_valid,
+tune.args = list(fc = c("L", "LQ", "LQH", "LQHP"), rm = seq(0.5, 3, 0. 0.
+),
+partitions = "block",
+algorithm = "maxent.jar",
+parallel = FALSE
+)
+results_table <- eval_results@ @results
+write.csv(results_table, "/INSERT/FILE/HERE", row.na
+mes = FALSE)
+best_idx <- which.min(results_table$ $AICc)
+best_model <- results_table[best_idx,]
+best_pred <- eval.predictions(eval_results)[best_idx]
+writeRaster(best_pred, "/INSERT/FILE/HERE", overwrite = TRUE)
+f" f", overwrite = TRUE)
+plot(best_pred)
+```
+# Model Validation
+
+## Boyce Index Calculation
+
+```{r boyce r boyce-
+-index, eval=FALSE}
+library(ecospat)
+occs <- read.csv(file.choose()
+occs_coords <- occs[, c("longitude", "latitude")]
+prediction <- rast(file.choose()
+obs_values <- extract(prediction, occs_coords)[, 2]
+obs_values <- obs_values[!is.na(obs_values)]
+all_values <- values(prediction)
+all_values <- all_values[!is.na(all_values)]
+boyce_result <- ecospat.boyce(
+fit = all_values,
+obs = obs_values,
+nclass = 0,
+window.w = "default",
+res = 100,
+PEplot = TRUE
+)
+print(paste("Boyce Index:", round(boyce_result$ $cor, 3)
+```{r boyce r boyce-
+-plot, eval=FALSE, fig.cap="Boyce Curve"}
+plot(boyce_result$ $HS, boyce_result$ $F.ratio, type = "l",
+xlab = "Habitat suitability (HS)",
+ylab = "P/E ratio",
+main = "Boyce Curve")
+```
+# JEV Risk Assessment
+
+## Agriculture Risk Classification
+
+-jev}
+```{r agriculture r agriculture-
+agric <- rast(file.choose()
+agric_jev <- agric
+agric_jev[agric = 190 | | agric = 195] <- 0.95
+agric_jev[agric = 111] <- 0.85
+agric_jev[agric = 1 | | agric = 10] <- 0.75
+agric_jev[agric = 61] <- 0.65
+agric_jev[agric = 176 | | agric = 71 | | agric = 37] <- 0.45
+agric_jev[agric = 2 | | agric = 43 | | agric = 45 | | agric = 47] <- 0.35
+agric_jev[agric = 142 | | agric = 152] <- 0.15
+agric_jev[agric >= 121 & & agric <= 124] <- 0.10
+agric_jev[agric = 72] <- 0.10
+agric_jev[agric = 0] <- 0
+writeRaster(agric_jev, "/INSERT/FILE/HERE", fil
+etype = "AAIGrid", overwrite = TRUE, NAflag = -
+-9999)
+```
+## Analytic Hierarchy Process (AHP) for JEV
+
+```{r ahp r ahp-
+-weights}
+criteria <- c("bio_1", "bio_2", "bio_4", "bio_5", "bio_9", "bio_12", "bio_1 "bio_1
+5" 5",
+"elevation", "agriculture", "wetland", "avian")
+jev_pairwise <- matrix(c(
+1, 2, 1/3, 2, 3, 1/3, 3, 1/5, 1/5, 1/5, 378 1/2, 1, 1/5, 1, 2, 1/4, 2, 1/5, 1/5, 1/5, 1/3,
+/3,
+3, 5, 1, 3, 3, 3, 3, 1/5, 1/3, 1/3, 2,
+1/2, 1, 1/3, 1, 2, 1/4, 2, 1/5, 1/5, 1/5, 381 1/3, 1/2, 1/3, 1/2, 1, 1/4, 1, 1/5, 1/5, 1/3,
+/5, 1/3,
+3, 4, 1/3, 4, 4, 1, 2, 1/5, 1/3, 1/3, 2,
+1/3, 1/2, 1/3, 1/2, 1, 1/2, 1, 1/5, 1/5, 384 1/5, 1/5, 1/5, 1/5, 1/5, 1/5, 1/5, 1, 1/5, 1/5, 1/5, 1/3,
+/5,
+5, 5, 3, 5, 5, 3, 5, 5, 1, 1, 3,
+3, 3, 1/2, 3, 3, 1/2, 3, 5, 1/3, 1/3, 1
+), nrow = 11, byrow = TRUE)
+rownames(jev_pairwise) <- criteria
+colnames(jev_pairwise) <- criteria
+calculate_ahp_weights <- function(matrix) {
+col_sums <- colSums(matrix)
+normalized_matrix <- sweep(matrix, 2, col_sums, FUN = "/")
+weights <- rowMeans(normalized_matrix)
+return(weights)
+}
+jev_weights <- calculate_ahp_weights(jev_pairwise)
+print("JEV AHP Weights:")
+print(round(jev_weights, 4)
+```
+## AHP Consistency Ratio
+
+```{r ahp r ahp-
+-consistency}
+calculate_consistency_ratio <- function(matrix, weights) {
+n <- nrow(matrix)
+weighted_sum <- matrix %*%*% weights
+lambda_max <- mean(weighted_sum / weights)
+CI <- (lambda_max -
+- n) / (n -
+- 1)
+RI_values <- c(0, 0, 0.58, 0.90, 1.12, 1.24, 1.32, 1.41, 1.45, 1.49, 1. 1.
+, 1.54)
+RI <- RI_values[n]
+CR <- CI / RI
+return(list(lambda_max = lambda_max, CI = CI, CR = CR)
+}
+consistency <- calculate_consistency_ratio(jev_pairwise, jev_weights)
+print(paste("Consistency Ratio:", round(consistency$ $CR, 4)
+```
+## Spearman Correlation with AHP Weights
+
+```{r spearman r spearman-
+-correlation}
+library(tidyr)
+files <- list.files("/INSERT/FILE/HERE", pattern="\\.a "\\.a
+sc$" sc$", full.names=TRUE)
+stack <- rast(files)
+names(stack) <- c("bio_1","bio_2","bio_4","bio_5","bio_9","bio_12","bio_1 "bio_1
+5" 5","elevation","agriculture","wetland","avian")
+weights <- c(0.093,0.078,0.102,0.075,0.079,0.136,0.078,0.053,0.097,0.078,0. 0.
+)
+cor_table <- values(stack) %>%
+as.data.frame() %>%
+mutate(weighted = as.matrix(. .) %*%*% weights) %>%
+summarise(across(-
+-weighted, ~ ~ cor(.x .x, weighted, method="spearman", use
+="complete.obs") %>%
+pivot_longer(everything(), names_to="Variable", values_to="Spearman") %
+>% >%
+mutate(Spearman = round(Spearman,3)
+write.csv(cor_table, "/INSERT/FILE/HERE", row. row.
+names=FALSE)
+```{r spearman r spearman-
+-heatmap, fig.cap="AHP Spearman Correlation"}
+mat <- matrix(cor_table$ $Spearman, nrow=1)
+colnames(mat) <- cor_table$ $Variable
+rownames(mat) <- "Weighted_AHP"
+melted <- melt(mat)
+ggplot(melted, aes(x=Var2, y=Var1, fill=value) +
+geom_tile(color="white") +
+scale_fill_gradient2(low="blue", mid="white", high="red", midpoint=0, l
+imits=c(-
+-1,1), name="Spearman") +
+theme_minimal() +
+theme(axis.text.x=element_text(angle=45,hjust=1) +
+labs(x="Criteria", y=""
+, title="AHP Spearman Correlation")
+```
+## Generate JEV Suitability Map
+
+```{r jev r jev-
+-suitability}
+layers_folder <- "/INSERT/FILE/HERE"
+bio_1 <- rast(file.path(layers_folder, "Florida_2.5m_Updatedwc2.1_2.5m_bio_ "/INSERT/FILE/HERE" 1.asc")
+bio_2 <- rast(file.path(layers_folder, "Florida_2.5m_Updatedwc2.1_2.5m_bio_ "/INSERT/FILE/HERE" 2.asc")
+bio_4 <- rast(file.path(layers_folder, "Florida_2.5m_Updatedwc2.1_2.5m_bio_ "/INSERT/FILE/HERE" 4.asc")
+bio_5 <- rast(file.path(layers_folder, "Florida_2.5m_Updatedwc2.1_2.5m_bio_ "/INSERT/FILE/HERE" 5.asc")
+bio_9 <- rast(file.path(layers_folder, "Florida_2.5m_Updatedwc2.1_2.5m_bio_ "/INSERT/FILE/HERE" 9.asc")
+bio_12 <- rast(file.path(layers_folder, "Florida_2.5m_Updatedwc2.1_2.5m_bio "/INSERT/FILE/HERE" _12.asc")
+bio_15 <- rast(file.path(layers_folder, "Florida_2.5m_Updatedwc2.1_2.5m_bio "/INSERT/FILE/HERE" _15.asc")
+elevation <- rast(file.path(layers_folder, "/INSERT/FILE/HERE")
+agriculture <- rast(file.path(layers_folder, "/INSERT/FILE/HERE")
+wetland <- rast(file.path(layers_folder, "Updated_Wetland_Use_2.5M_aligned. "Updated_Wetland_Use_2.5M_aligned.
+asc" asc")
+avian <- rast(file.path(layers_folder, "/INSERT/FILE/HERE")
+all_layers <- c(bio_1, bio_2, bio_4, bio_5, bio_9, bio_12, bio_15,
+elevation, agriculture, wetland, avian)
+names(all_layers) <- c("bio_1", "bio_2", "bio_4", "bio_5", "bio_9", "bio_1 "bio_1
+2" 2", "bio_15",
+"elevation", "agriculture", "wetland", "avian")
+stats <- global(all_layers, c("min", "max"), na.rm = TRUE)
+min_vals <- stats$ $min
+max_vals <- stats$ $max
+normalized_layers <- (all_layers -
+- min_vals) / (max_vals -
+- min_vals)
+weighted_layers <- normalized_layers * jev_weights
+jev_suitability <- sum(weighted_layers, na.rm = TRUE)
+final_stats <- global(jev_suitability, c("min", "max"), na.rm = TRUE)
+min_s <- final_stats$ $min
+max_s <- final_stats$ $max
+jev_suitability <- (jev_suitability -
+- min_s) / (max_s -
+- min_s)
+```{r jev r jev-
+-map, fig.cap="JEV AHP Suitability Map"}
+plot(jev_suitability,
+main = "JEV AHP Suitability (0=Low, 1=High)",
+col = hcl.colors(100, "Spectral", rev = TRUE),
+colNA = "lightgray")
+writeRaster(jev_suitability,
+"/INSERT/FILE/HERE",
+overwrite = TRUE)
+```
+# Niche Overlap Analysis
+
+## Calculate Niche Overlap Metrics
+
+```{r niche r niche-
+-overlap}
+wnv <- rast(file.choose()
+jev <- rast(file.choose()
+jev <- resample(jev, wnv, method="bilinear")
+norm <- function(x) {
+r <- minmax(x)
+(x -
+- r[1]) / (r[2] -
+- r[1])
+}
+wnv_n <- norm(wnv)
+jev_n <- norm(jev)
+overlap_metrics <- function(a, b){
+pa <- values(a);; pb <- values(b)
+ok <- complete.cases(pa, pb)
+pa <- pa[ok];; pb <- pb[ok]
+if(sum(pa)=0 || sum(pb)=0) return(c(D=NA, I=NA, Bh=NA)
+pa <- pa / sum(pa)
+pb <- pb / sum(pb)
+D <- 1 -
+- 0.5 * sum(abs(pa -
+- pb)
+I <- sum(sqrt(pa * pb)
+Bh <- -
+-log(sum(sqrt(pa * pb)
+return(c(D=D, I=I, Bh=Bh)
+}
+obs <- overlap_metrics(wnv_n, jev_n)
+```
+## Permutation Test for Significance
+
+```{r permutation r permutation-
+-test}
+set.seed(123)
+n_perm <- 1000
+perm_vals <- matrix(NA, n_perm, 3)
+colnames(perm_vals) <- c("D","I","Bh")
+for(i in 1::n_perm){
+perm_vals_vec <- sample(values(jev_n)
+jev_perm <- setValues(jev_n, perm_vals_vec)
+perm_vals[i,] <- overlap_metrics(wnv_n, jev_perm)
+}
+p_D <- mean(perm_vals[,"D"] >= obs["D"], na.rm=TRUE)
+p_I <- mean(perm_vals[,"I"] >= obs["I"], na.rm=TRUE)
+p_Bh <- mean(perm_vals[,"Bh"] <= obs["Bh"], na.rm=TRUE)
+cat("Schoener's D:", round(obs["D"], 3), "\n")
+cat("Hellinger I:", round(obs["I"], 3), "\n")
+cat("Bhattacharyya Distance:", round(obs["Bh"], 3), "\n")
+cat("p(D):", round(p_D, 4), "\n")
+cat("p(I):", round(p_I, 4), "\n")
+cat("p(Bh):", round(p_Bh, 4), "\n")
+```
+# Visualization
+
+## Bivariate Niche Density Plot
+
+```{r bivariate r bivariate-
+-niche, fig.cap="Bivariate Niche Density: WNV vs JEV"}
+wnv <- rast(file.choose()
+jev <- rast(file.choose()
+jev <- resample(jev, wnv, method="bilinear")
+wnv_n <- (wnv -
+- minmax(wnv)[1]) 551 jev_n <- (jev -
+- minmax(jev)[1]) / (minmax(wnv)[2] -
+- minmax(wnv)[1])
+(minmax(jev)[2] -
+- minmax(jev)[1])
+wv <- values(wnv_n)
+jv <- values(jev_n)
+ok <- complete.cases(wv, jv)
+wv <- wv[ok]
+jv <- jv[ok]
+niche_df <- data.frame(WNV=wv, 558 ggplot(niche_df, aes(x=WNV, JEV=jv)
+y=JEV) +
+geom_bin2d(bins=100) +
+scale_fill_gradient(low="white", high="darkred") +
+theme_minimal() +
+labs(x="WNV suitability", y="JEV suitability",
+title="Bivariate Niche Density: WNV vs JEV")
+```
+## Pixel-wise Difference Map
+
+```{r difference-map, fig.cap="Pixel-wise Suitability Difference (WNV - JE "Pixel-wise Suitability Difference (WNV - JE
+V)" V)"}
+diff_rast <- wnv_n -
+- jev_n
+plot(diff_rast, col=viridis::::viridis(100), main="Pixel-wise Difference (WNV "Pixel-wise Difference (WNV
+- JEV)" - JEV)")
